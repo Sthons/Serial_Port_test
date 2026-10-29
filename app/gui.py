@@ -72,6 +72,7 @@ TEXT_COLOR = "#111827"
 MUTED_COLOR = "#6b7280"
 LOG_BG = "#0f172a"
 CHANNEL_WIDTH = 388
+CHANNEL_AREA_HEIGHT = 600
 
 STATUS_COLORS = {
     STATUS_IDLE: "#6b7280",
@@ -143,6 +144,7 @@ class SerialTestApp:
         self._device_to_label: dict[str, str] = {}
         self._label_to_device: dict[str, str] = {}
         self._canvas_window_id: int | None = None
+        self._page_window_id: int | None = None
         self._max_columns = 0
 
         self._configure_fonts()
@@ -169,16 +171,40 @@ class SerialTestApp:
 
     def _build_ui(self) -> None:
         self.root.title("多通道串口通讯测试工具")
-        self.root.geometry("1240x900")
-        self.root.minsize(1100, 800)
+        # 按屏幕尺寸自适应初始窗口，1366x768 等小屏也不会超出可用区域
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        init_w = min(1240, max(980, screen_w - 80))
+        init_h = min(900, max(560, screen_h - 120))
+        self.root.geometry(f"{init_w}x{init_h}")
+        self.root.minsize(980, 520)
         self.root.configure(bg=PAGE_BG)
 
         style = ttk.Style(self.root)
         if "vista" in style.theme_names():
             style.theme_use("vista")
 
-        page = tk.Frame(self.root, bg=PAGE_BG, padx=16, pady=14)
-        page.pack(fill="both", expand=True)
+        # 整页竖向滚动，适配 1366x768 及更小分辨率
+        scroll_host = tk.Frame(self.root, bg=PAGE_BG)
+        scroll_host.pack(fill="both", expand=True)
+        self.page_canvas = tk.Canvas(
+            scroll_host, bg=PAGE_BG, highlightthickness=0, bd=0
+        )
+        self.page_scroll = ttk.Scrollbar(
+            scroll_host, orient="vertical", command=self.page_canvas.yview
+        )
+        self.page_canvas.configure(yscrollcommand=self.page_scroll.set)
+        self.page_scroll.pack(side="right", fill="y")
+        self.page_canvas.pack(side="left", fill="both", expand=True)
+
+        page = tk.Frame(self.page_canvas, bg=PAGE_BG, padx=16, pady=14)
+        self.page = page
+        self._page_window_id = self.page_canvas.create_window(
+            (0, 0), window=page, anchor="nw"
+        )
+        page.bind("<Configure>", self._on_page_configure)
+        self.page_canvas.bind("<Configure>", self._on_page_canvas_configure)
+        self.root.bind_all("<MouseWheel>", self._on_page_mousewheel, add="+")
 
         # 标题与总体判定
         header = tk.Frame(page, bg=PAGE_BG)
@@ -371,7 +397,11 @@ class SerialTestApp:
         columns_wrap = tk.Frame(page, bg=PAGE_BG)
         columns_wrap.pack(fill="both", expand=True)
         self.columns_canvas = tk.Canvas(
-            columns_wrap, bg=PAGE_BG, highlightthickness=0, bd=0
+            columns_wrap,
+            bg=PAGE_BG,
+            highlightthickness=0,
+            bd=0,
+            height=CHANNEL_AREA_HEIGHT,
         )
         self.columns_scroll = ttk.Scrollbar(
             columns_wrap, orient="horizontal", command=self.columns_canvas.xview
@@ -761,7 +791,7 @@ class SerialTestApp:
         width = max(
             self.columns_canvas.winfo_width(), len(self.rows) * CHANNEL_WIDTH, 1
         )
-        height = max(self.columns_canvas.winfo_height(), 600)
+        height = max(self.columns_canvas.winfo_height(), CHANNEL_AREA_HEIGHT)
         self.columns_canvas.itemconfigure(
             self._canvas_window_id, width=width, height=height
         )
@@ -771,11 +801,39 @@ class SerialTestApp:
             return
         width = max(event.width, len(self.rows) * CHANNEL_WIDTH, 1)
         self.columns_canvas.itemconfigure(
-            self._canvas_window_id, width=width, height=max(event.height, 600)
+            self._canvas_window_id, width=width, height=max(event.height, CHANNEL_AREA_HEIGHT)
         )
 
     def _on_columns_frame_configure(self, _event: tk.Event) -> None:
         self.columns_canvas.configure(scrollregion=self.columns_canvas.bbox("all"))
+
+    def _on_page_configure(self, _event: tk.Event | None = None) -> None:
+        self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all"))
+
+    def _on_page_canvas_configure(self, event: tk.Event) -> None:
+        if self._page_window_id is None:
+            return
+        # 内容比可视区矮时铺满，比可视区高时保持内容高度以触发竖向滚动
+        height = max(event.height, self.page.winfo_reqheight())
+        self.page_canvas.itemconfigure(
+            self._page_window_id, width=event.width, height=height
+        )
+
+    def _on_page_mousewheel(self, event: tk.Event) -> None:
+        if self._wheel_belongs_to_child(event):
+            return
+        self.page_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _wheel_belongs_to_child(self, event: tk.Event) -> bool:
+        """日志文本框与下拉弹窗自己处理滚轮，避免整页跟着滚动。"""
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        while widget is not None:
+            if isinstance(widget, tk.Text):
+                return True
+            if widget.winfo_toplevel() is not self.root:
+                return True
+            widget = widget.master
+        return False
 
     # ------------------------------------------------------------------ 状态渲染
     def _render_row(

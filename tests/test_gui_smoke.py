@@ -579,6 +579,32 @@ class GuiSmokeTest(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_page_vertical_scroll_for_small_screens(self) -> None:
+        app, root = self._create_app()
+        if app is None:
+            return
+        try:
+            import tkinter as tk
+
+            self.assertIsInstance(app.page_canvas, tk.Canvas)
+            self.assertEqual(str(app.page_scroll.cget("orient")), "vertical")
+            self.assertTrue(str(app.page_canvas.cget("yscrollcommand")))
+            self.assertEqual(app._page_window_id is not None, True)
+
+            root.update_idletasks()
+            app._on_page_configure()
+            bbox = app.page_canvas.bbox("all")
+            self.assertIsNotNone(bbox)
+            self.assertGreater(bbox[3], 0)
+
+            # 内容高于可视区时应能向下滚动
+            app.page_canvas.configure(scrollregion=(0, 0, 1000, 2000))
+            app.page_canvas.yview_moveto(1.0)
+            root.update_idletasks()
+            self.assertGreater(app.page_canvas.yview()[0], 0.0)
+        finally:
+            root.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()
